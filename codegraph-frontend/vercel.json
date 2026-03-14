@@ -1,0 +1,3 @@
+{
+  "rewrites": [{ "source": "/api/(.*)", "destination": "http://YOUR_BACKEND_URL/api/$1" }]
+}

@@ -1,0 +1,18 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body,#root{height:100%;overflow:hidden}
+body{font-family:'Geist',system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+
+/* Scanlines on dark */
+.dark body::after{
+  content:'';position:fixed;inset:0;z-index:9999;pointer-events:none;
+  background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,.03) 2px,rgba(0,0,0,.03) 4px);
+}
+
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-track{background:transparent}
+.dark ::-webkit-scrollbar-thumb{background:#263348;border-radius:3px}
+::-webkit-scrollbar-thumb{background:#c5bfb5;border-radius:3px}
