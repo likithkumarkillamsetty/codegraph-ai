@@ -35,5 +35,20 @@ public interface CodeChunkRepository extends JpaRepository<CodeChunkEntity, Long
             @Param("fileName") String fileName
     );
 
-    
+    @Query(value = """
+        SELECT id, project_id, file_path, content,
+               embedding <-> CAST(:embedding AS vector) AS similarity
+        FROM code_chunks
+        WHERE project_id = :projectId
+        AND LOWER(file_path) LIKE LOWER(CONCAT('%', :pathFragment, '%'))
+        ORDER BY embedding <-> CAST(:embedding AS vector)
+        LIMIT :limit
+        """, nativeQuery = true)
+    List<CodeChunkEntity> findSimilarChunksInPath(
+            @Param("embedding") String embedding,
+            @Param("projectId") Long projectId,
+            @Param("pathFragment") String pathFragment,
+            @Param("limit") int limit
+    );
+
 }

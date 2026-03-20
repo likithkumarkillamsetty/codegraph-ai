@@ -25,26 +25,303 @@ public class SearchService {
         this.chatService = chatService;
     }
 
-    private boolean mentionsFile(String query) {
-        String q = query.toLowerCase();
-        return q.contains(".properties") || q.contains(".yml") || q.contains(".yaml") ||
-                q.contains(".xml") || q.contains(".java") || q.contains(".json") ||
-                q.contains(".sql") || q.contains(".md") || q.contains(".txt") ||
-                q.contains("application properties") || q.contains("application.properties") ||
-                q.contains("docker compose") || q.contains("docker-compose") ||
-                q.contains("pom.xml") || q.contains("pom xml");
+    // ─── Step 1: Ask LLM to classify the question ───────────────────────────────
+
+    private String classifyQuestion(String question) {
+        String prompt = """
+You are a classifier for a code intelligence assistant.
+Classify the following question into EXACTLY one of these categories:
+
+CASUAL     - greetings, general chat, non-technical ("hi", "thanks", "what is AI")
+ARCHITECTURE - asking about tech stack, frameworks, dependencies, project structure, frontend/backend technologies
+FILE       - asking about a specific file by name (e.g. "show me App.tsx", "what's in pom.xml")
+CLASS      - asking about a specific Java class or React component by name (e.g. "how does SearchService work")
+CODE       - asking about specific functionality, logic, flow, or how something works in the codebase
+
+Question: "%s"
+
+Reply with ONLY the single category word. No explanation. No punctuation.
+""".formatted(question);
+
+        String result = chatService.generateAnswer(prompt).strip().toUpperCase();
+
+        // Sanitize — only accept known categories
+        if (result.contains("CASUAL")) return "CASUAL";
+        if (result.contains("ARCHITECTURE")) return "ARCHITECTURE";
+        if (result.contains("FILE")) return "FILE";
+        if (result.contains("CLASS")) return "CLASS";
+        if (result.contains("CODE")) return "CODE";
+        return "CODE"; // safe fallback
     }
 
-    private String extractFileName(String query) {
-        String q = query.toLowerCase();
-        if (q.contains("application properties") || q.contains("application.properties"))
-            return "application.properties";
-        if (q.contains("docker compose") || q.contains("docker-compose"))
-            return "docker-compose.yml";
-        if (q.contains("pom.xml") || q.contains("pom xml"))
-            return "pom.xml";
+    // ─── Step 2: Route to correct handler ────────────────────────────────────────
 
-        String[] extensions = {".properties", ".yml", ".yaml", ".xml", ".java", ".json", ".sql", ".md", ".txt"};
+    public AskResponse askQuestion(Long projectId, String question) {
+
+        String category = classifyQuestion(question);
+
+        return switch (category) {
+            case "CASUAL"       -> handleCasual(question);
+            case "ARCHITECTURE" -> handleArchitecture(projectId, question);
+            case "FILE"         -> handleFile(projectId, question);
+            case "CLASS"        -> handleClass(projectId, question);
+            default             -> handleCode(projectId, question);
+        };
+    }
+
+    // ─── CASUAL: No RAG, direct answer ───────────────────────────────────────────
+
+    private AskResponse handleCasual(String question) {
+        String prompt = """
+You are CodeGraph AI, a helpful assistant for developers.
+Answer this conversational message naturally and briefly.
+
+Message: %s
+""".formatted(question);
+        return new AskResponse(chatService.generateAnswer(prompt), false);
+    }
+
+    // ─── ARCHITECTURE: Fetch config + package files ───────────────────────────────
+
+    private AskResponse handleArchitecture(Long projectId, String question) {
+        String q = question.toLowerCase();
+
+        List<CodeChunkEntity> chunks = new ArrayList<>();
+
+        // If question is specifically about frontend, bias toward frontend files
+        if (q.contains("frontend") || q.contains("react") || q.contains("ui") || q.contains("client")) {
+            chunks.addAll(repository.findByFileName(projectId, "package.json"));
+            chunks.addAll(repository.findByFileName(projectId, "vite.config"));
+            chunks.addAll(repository.findByFileName(projectId, "tailwind"));
+            chunks.addAll(repository.findByFileName(projectId, "tsconfig"));
+            chunks.addAll(repository.findByFilePathContaining(projectId, "codegraph-frontend", 5));
+        }
+        // If specifically about backend
+        else if (q.contains("backend") || q.contains("java") || q.contains("spring") || q.contains("server")) {
+            chunks.addAll(repository.findByFileName(projectId, "pom.xml"));
+            chunks.addAll(repository.findByFileName(projectId, "application.properties"));
+            chunks.addAll(repository.findByFileName(projectId, "Dockerfile"));
+            chunks.addAll(repository.findByFilePathContaining(projectId, "codegraph-backend", 5));
+        }
+        // General architecture question — fetch both sides
+        else {
+            chunks.addAll(repository.findByFileName(projectId, "pom.xml"));
+            chunks.addAll(repository.findByFileName(projectId, "package.json"));
+            chunks.addAll(repository.findByFileName(projectId, "application.properties"));
+            chunks.addAll(repository.findByFileName(projectId, "readme"));
+            chunks.addAll(repository.findByFileName(projectId, "Dockerfile"));
+        }
+
+        if (chunks.isEmpty()) {
+            // Fallback to vector search if no config files found
+            return handleCode(projectId, question);
+        }
+
+        String context = chunks.stream()
+                .limit(6)
+                .map(c -> "FILE: " + c.getFilePath() + "\nCONTENT:\n" + c.getContent())
+                .collect(Collectors.joining("\n\n---\n\n"));
+
+        String prompt = """
+You are CodeGraph AI — an expert software engineer explaining a codebase.
+
+You have been given configuration and structure files from the project.
+
+Answer the user's question clearly:
+- List the technologies, frameworks, and libraries used
+- Mention which files confirm this (package.json, pom.xml, etc.)
+- Separate frontend and backend concerns if relevant
+- Be concise and accurate
+
+Code Context:
+%s
+
+User Question:
+%s
+""".formatted(context, question);
+
+        return new AskResponse(chatService.generateAnswer(prompt), true);
+    }
+
+    // ─── FILE: Fetch specific file by name ───────────────────────────────────────
+
+    private AskResponse handleFile(Long projectId, String question) {
+        // Extract filename from question
+        String fileName = extractFileName(question);
+
+        List<CodeChunkEntity> chunks = fileName.isEmpty()
+                ? List.of()
+                : repository.findByFileName(projectId, fileName);
+
+        if (chunks.isEmpty()) {
+            // Fallback to vector search
+            return handleCode(projectId, question);
+        }
+
+        String context = chunks.stream()
+                .limit(5)
+                .map(c -> "FILE: " + c.getFilePath() + "\nCONTENT:\n" + c.getContent())
+                .collect(Collectors.joining("\n\n---\n\n"));
+
+        String prompt = """
+You are CodeGraph AI — an expert software engineer.
+
+You have been given the contents of a specific file from the project.
+
+Explain:
+- What this file is responsible for
+- Key configurations, classes, or logic inside it
+- How it relates to the rest of the project
+
+Code Context:
+%s
+
+User Question:
+%s
+""".formatted(context, question);
+
+        return new AskResponse(chatService.generateAnswer(prompt), true);
+    }
+
+    // ─── CLASS: Fetch specific class by name ─────────────────────────────────────
+
+    private AskResponse handleClass(Long projectId, String question) {
+        String className = extractClassName(question);
+
+        List<CodeChunkEntity> chunks = className == null
+                ? List.of()
+                : repository.findByFileName(projectId, className);
+
+        if (chunks.isEmpty()) {
+            return handleCode(projectId, question);
+        }
+
+        String context = chunks.stream()
+                .limit(5)
+                .map(c -> "FILE: " + c.getFilePath() + "\nCODE:\n" + c.getContent())
+                .collect(Collectors.joining("\n\n---\n\n"));
+
+        String prompt = """
+You are CodeGraph AI — a senior software engineer explaining a codebase.
+
+You have been given source code from a specific class or component.
+
+Explain:
+- What this class/component is responsible for
+- Important methods, fields, and their purpose
+- How it interacts with other parts of the system
+- Frameworks or patterns used
+
+Code Context:
+%s
+
+User Question:
+%s
+""".formatted(context, question);
+
+        return new AskResponse(chatService.generateAnswer(prompt), true);
+    }
+
+    // ─── CODE: Vector similarity search + RAG ────────────────────────────────────
+
+    private AskResponse handleCode(Long projectId, String question) {
+        String queryEmbedding = embeddingService.getEmbedding(question);
+
+        // Path-aware search: bias results toward frontend or backend if mentioned
+        List<CodeChunkEntity> chunks;
+        String q = question.toLowerCase();
+
+        if (q.contains("frontend") || q.contains("react") || q.contains("component") || q.contains("ui")) {
+            chunks = repository.findSimilarChunksInPath(queryEmbedding, projectId, "codegraph-frontend", 5);
+            if (chunks.isEmpty()) {
+                chunks = repository.searchSimilarChunks(projectId, queryEmbedding, 5);
+            }
+        } else if (q.contains("backend") || q.contains("spring") || q.contains("java") || q.contains("api")) {
+            chunks = repository.findSimilarChunksInPath(queryEmbedding, projectId, "codegraph-backend", 5);
+            if (chunks.isEmpty()) {
+                chunks = repository.searchSimilarChunks(projectId, queryEmbedding, 5);
+            }
+        } else {
+            chunks = repository.searchSimilarChunks(projectId, queryEmbedding, 5);
+        }
+
+        if (chunks.isEmpty()) {
+            return new AskResponse(chatService.generateAnswer(question), false);
+        }
+
+        // Filter out low-quality chunks (too short or low similarity)
+        chunks = chunks.stream()
+                .filter(c -> c.getContent() != null && c.getContent().trim().length() > 50)
+                .filter(c -> c.getSimilarity() != null && c.getSimilarity() > 0.2)
+                .limit(3)
+                .collect(Collectors.toList());
+
+        if (chunks.isEmpty()) {
+            return handleCasual(question);
+        }
+
+        String context = chunks.stream()
+                .map(c -> "FILE: " + c.getFilePath() + "\nCODE:\n" + c.getContent())
+                .collect(Collectors.joining("\n\n---\n\n"));
+
+        String prompt = """
+You are CodeGraph AI — a senior software engineer helping developers understand a codebase.
+
+You have been given relevant code snippets retrieved from the project.
+
+Instructions:
+1. Answer the question directly and concisely first.
+2. Reference specific classes, methods, and files from the context.
+3. Explain the logic step-by-step where relevant.
+4. Do NOT invent code or logic not present in the context.
+
+Code Context:
+%s
+
+User Question:
+%s
+""".formatted(context, question);
+
+        return new AskResponse(chatService.generateAnswer(prompt), true);
+    }
+
+    // ─── Search endpoint (used by /search API) ────────────────────────────────────
+
+    public List<SearchResult> search(Long projectId, String query) {
+        String queryEmbedding = embeddingService.getEmbedding(query);
+        List<CodeChunkEntity> chunks = repository.searchSimilarChunks(projectId, queryEmbedding, 10);
+
+        if (chunks.isEmpty()) return new ArrayList<>();
+
+        return chunks.stream()
+                .filter(c -> c.getContent() != null && c.getContent().trim().length() > 50)
+                .limit(3)
+                .map(chunk -> new SearchResult(
+                        chunk.getFilePath(),
+                        chunk.getContent(),
+                        chunk.getSimilarity()
+                ))
+                .toList();
+    }
+
+    // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+    private String extractFileName(String question) {
+        String q = question.toLowerCase();
+
+        // Named files
+        if (q.contains("application.properties") || q.contains("application properties")) return "application.properties";
+        if (q.contains("docker-compose") || q.contains("docker compose")) return "docker-compose.yml";
+        if (q.contains("pom.xml") || q.contains("pom xml")) return "pom.xml";
+        if (q.contains("package.json")) return "package.json";
+        if (q.contains("vite.config")) return "vite.config.ts";
+        if (q.contains("tailwind.config")) return "tailwind.config.js";
+        if (q.contains("dockerfile")) return "Dockerfile";
+        if (q.contains("readme")) return "README.md";
+
+        // Extract by extension
+        String[] extensions = {".tsx", ".ts", ".jsx", ".js", ".java", ".properties",
+                ".yml", ".yaml", ".xml", ".json", ".sql", ".md", ".txt"};
         for (String ext : extensions) {
             int idx = q.indexOf(ext);
             if (idx != -1) {
@@ -56,188 +333,20 @@ public class SearchService {
         return "";
     }
 
-    public List<SearchResult> search(Long projectId, String query) {
-
-        if (mentionsFile(query)) {
-            String fileName = extractFileName(query);
-            if (!fileName.isEmpty()) {
-                List<CodeChunkEntity> fileChunks = repository.findByFileName(projectId, fileName);
-                if (!fileChunks.isEmpty()) {
-                    return fileChunks.stream()
-                            .limit(1)
-                            .map(chunk -> new SearchResult(
-                                    chunk.getFilePath(),
-                                    chunk.getContent(),
-                                    chunk.getSimilarity()
-                            ))
-                            .toList();
-                }
-            }
-        }
-
-        String queryEmbedding = embeddingService.getEmbedding(query);
-        List<CodeChunkEntity> chunks = repository.searchSimilarChunks(projectId, queryEmbedding, 10);
-
-        if (chunks.isEmpty()) return new ArrayList<>();
-
-        return chunks.stream()
-                .limit(3)
-                .map(chunk -> new SearchResult(
-                        chunk.getFilePath(),
-                        chunk.getContent(),
-                        chunk.getSimilarity()
-                ))
-                .toList();
-    }
-
-    private String detectClassName(String question) {
+    private String extractClassName(String question) {
+        // Only match actual Java class names or React component names (PascalCase, 4+ chars, ends with known suffix)
         String[] words = question.split("\\s+");
-        for (String w : words) {
-            if (w.length() > 3 && Character.isUpperCase(w.charAt(0))) {
-                return w.replaceAll("[^a-zA-Z0-9]", "");
+        for (String word : words) {
+            String clean = word.replaceAll("[^a-zA-Z0-9]", "");
+            if (clean.length() >= 4
+                    && Character.isUpperCase(clean.charAt(0))
+                    && (clean.endsWith("Service") || clean.endsWith("Controller")
+                    || clean.endsWith("Repository") || clean.endsWith("Component")
+                    || clean.endsWith("Entity") || clean.endsWith("Config")
+                    || clean.endsWith("Filter") || clean.endsWith("Handler"))) {
+                return clean;
             }
         }
         return null;
-    }
-
-    public AskResponse askQuestion(Long projectId, String question) {
-
-        String q = question.toLowerCase().trim();
-
-        // 1️⃣ Detect class / file name in question
-        String className = detectClassName(question);
-
-        if (className != null) {
-            List<CodeChunkEntity> classChunks = repository.findByFileName(projectId, className);
-
-            if (!classChunks.isEmpty()) {
-                String context = classChunks.stream()
-                        .limit(5)
-                        .map(c -> "FILE: " + c.getFilePath() + "\nCODE:\n" + c.getContent())
-                        .collect(Collectors.joining("\n\n"));
-
-                String prompt = """
-You are CodeGraph AI — an expert software engineer helping developers understand a codebase.
-
-You have been given source code from a specific class/file.
-
-Your task:
-- Explain what this class/file is responsible for
-- Describe important methods, fields, and responsibilities
-- Explain how it interacts with the rest of the system
-- Mention frameworks or patterns used (Spring Boot, JPA, etc.)
-
-Guidelines:
-- Use ONLY the provided code context
-- Reference class names, methods, and files
-- Keep explanations concise but technical
-
-Code Context:
-%s
-
-User Question:
-%s
-""".formatted(context, question);
-
-                String answer = chatService.generateAnswer(prompt);
-                return new AskResponse(answer, true);
-            }
-        }
-
-        // 2️⃣ Generate embedding for vector search
-        String queryEmbedding = embeddingService.getEmbedding(question);
-        List<CodeChunkEntity> chunks = repository.searchSimilarChunks(projectId, queryEmbedding, 10);
-
-        if (chunks.isEmpty()) {
-            String answer = chatService.generateAnswer(question);
-            return new AskResponse(answer, false);
-        }
-
-        double similarity = chunks.get(0).getSimilarity();
-
-        // 3️⃣ Project-level questions
-        if (q.contains("project") || q.contains("repository")
-                || q.contains("repo") || q.contains("codebase")
-                || q.contains("system") || q.contains("application")) {
-
-            List<CodeChunkEntity> projectChunks = new ArrayList<>();
-            projectChunks.addAll(repository.findByFileName(projectId, "pom.xml"));
-            projectChunks.addAll(repository.findByFileName(projectId, "application"));
-            projectChunks.addAll(repository.findByFileName(projectId, "docker"));
-            projectChunks.addAll(repository.findByFileName(projectId, "readme"));
-            projectChunks.addAll(chunks);
-
-            String context = projectChunks.stream()
-                    .limit(6)
-                    .map(c -> "FILE: " + c.getFilePath() + "\nCODE:\n" + c.getContent())
-                    .collect(Collectors.joining("\n\n"));
-
-            String prompt = """
-You are CodeGraph AI — an AI assistant designed to explain software repositories.
-
-You are given code snippets from a project.
-
-Explain the project clearly.
-
-Focus on:
-- What problem this project solves
-- Main technologies used
-- Important components and services
-- How the system works at a high level
-- Key controllers, services, and data flow
-
-Guidelines:
-- Base your answer ONLY on the provided code context
-- Mention file names and classes when relevant
-- Use headings or bullet points
-
-Code Context:
-%s
-
-User Question:
-%s
-""".formatted(context, question);
-
-            String answer = chatService.generateAnswer(prompt);
-            return new AskResponse(answer, true);
-        }
-
-        // 4️⃣ Stop RAG for unrelated chat
-        if (similarity < 0.3) {
-            String answer = chatService.generateAnswer(question);
-            return new AskResponse(answer, false);
-        }
-
-        // 5️⃣ Normal RAG pipeline
-        String context = chunks.stream()
-                .limit(3)
-                .map(c -> "FILE: " + c.getFilePath() + "\nCODE:\n" + c.getContent())
-                .collect(Collectors.joining("\n\n"));
-
-        String prompt = """
-You are CodeGraph AI — a senior software engineer helping developers understand code.
-
-You are given relevant code snippets from a real project.
-
-Instructions:
-1. Answer the question briefly first.
-2. Then explain the relevant code in detail.
-3. Mention specific classes, methods, and files involved.
-4. Describe how the logic works step-by-step.
-
-Rules:
-- Use ONLY the provided code context
-- Do not invent code
-- Keep explanations precise and technical
-
-Code Context:
-%s
-
-User Question:
-%s
-""".formatted(context, question);
-
-        String answer = chatService.generateAnswer(prompt);
-        return new AskResponse(answer, true);
     }
 }
