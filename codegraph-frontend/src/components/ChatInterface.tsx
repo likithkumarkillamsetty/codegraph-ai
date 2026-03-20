@@ -9,6 +9,7 @@ import SnippetCard from './SnippetCard'
 import ExportButton from './ExportButton'
 import type { Message } from '../types'
 import ReactMarkdown from 'react-markdown'
+
 const SUGGESTIONS = [
   'What does this project do?','List all REST API endpoints',
   'Explain the database schema','How is authentication handled?',
@@ -39,7 +40,7 @@ export default function ChatInterface() {
       toast.success('Embeddings ready — chat enabled!')
       if (activeProjectId) addMessage(activeProjectId, {
         role: 'system',
-        content: '⬡ Vector embeddings generated via nomic-embed-text. pgvector indexed. RAG pipeline is ready — ask anything!',
+        content: '⬡ Vector embeddings generated. pgvector indexed. RAG pipeline is ready — ask anything!',
       })
     },
     onError: (e: Error) => { setEmbedding(false); toast.error(`Embedding failed: ${e.message}`) },
@@ -49,44 +50,40 @@ export default function ChatInterface() {
     mutationFn: async (q: string) => {
       if (!project) throw new Error('No project')
 
-      // First call ask API
-      const response = await projectApi.ask(project.id, q)
+      // Get the last user question for context-aware classification
+      const userMsgs = msgs.filter(m => m.role === 'user')
+      const previousQuestion = userMsgs.length >= 2
+        ? userMsgs[userMsgs.length - 2].content
+        : ''
+
+      const response = await projectApi.ask(project.id, q, previousQuestion)
 
       let sources: any[] = []
 
-      // Only fetch snippets if backend says they are relevant
       if (response.showSnippets) {
         try {
-          sources = await projectApi.search(project.id, q)
+          const rawSources = await projectApi.search(project.id, q)
+          sources = rawSources
+            .filter((s: any) => s.content && s.content.trim().length > 100)
+            .slice(0, 3)
         } catch {
           sources = []
         }
       }
 
-      return {
-        answer: response.answer,
-        sources: sources.slice(0, 3),
-      }
+      return { answer: response.answer, sources }
     },
 
     onSuccess: ({ answer, sources }) => {
       setThinking(false)
-
       if (activeProjectId)
-        addMessage(activeProjectId, {
-          role: 'ai',
-          content: answer,
-          sources: sources,
-        })
+        addMessage(activeProjectId, { role: 'ai', content: answer, sources })
     },
 
     onError: (e: Error) => {
       setThinking(false)
       if (activeProjectId)
-        addMessage(activeProjectId, {
-          role: 'system',
-          content: `✖ Error: ${e.message}`,
-        })
+        addMessage(activeProjectId, { role: 'system', content: `✖ Error: ${e.message}` })
     },
   })
 
@@ -143,7 +140,7 @@ export default function ChatInterface() {
           <motion.div initial={{height:0}} animate={{height:'auto'}} exit={{height:0}}
             className={`border-b overflow-hidden ${d?'bg-[#0e1117] border-[#1e2838]':'bg-[#faf9f6] border-[#d5d0c8]'}`}>
             <div className="px-5 py-2 flex flex-col gap-1.5">
-              <div className={`font-mono text-[10px] ${d?'text-[#7a8fa8]':'text-[#5a5650]'}`}>Generating vector embeddings via Ollama (nomic-embed-text)…</div>
+              <div className={`font-mono text-[10px] ${d?'text-[#7a8fa8]':'text-[#5a5650]'}`}>Generating vector embeddings…</div>
               <div className={`h-0.5 rounded-full overflow-hidden ${d?'bg-[#1e2838]':'bg-[#d5d0c8]'}`}>
                 <motion.div className="h-full rounded-full bg-gradient-to-r from-[#3fb950] to-[#58d6e4]"
                   animate={{width:['0%','85%']}} transition={{duration:8,ease:'easeInOut'}}/>
@@ -199,7 +196,6 @@ export default function ChatInterface() {
                       <ReactMarkdown>{msg.content}</ReactMarkdown>
                     </div>
 
-                    {/* Sources */}
                     {msg.sources && msg.sources.length > 0 && (
                       <div className="mt-2 space-y-2">
                         <div className={`font-mono text-[9px] flex items-center gap-2 ${d?'text-[#3d5068]':'text-[#9a9590]'}`}>
@@ -216,7 +212,6 @@ export default function ChatInterface() {
               )
             })}
 
-            {/* Thinking */}
             {isThinking && (
               <motion.div initial={{opacity:0,y:8}} animate={{opacity:1,y:0}} className="flex gap-3">
                 <div className="flex flex-col items-center pt-1 flex-shrink-0">
