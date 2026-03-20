@@ -25,48 +25,93 @@ public class SearchService {
         this.chatService = chatService;
     }
 
-    // ─── Step 1: LLM classifies the question ─────────────────────────────────────
+    // ─── Step 1: Classify the question ───────────────────────────────────────────
 
     private String classifyQuestion(String question, String previousQuestion) {
 
         String q = question.toLowerCase().trim();
 
-        // ── Hardcoded follow-up rule ──────────────────────────────────────────────
-        // If user has a previous question and current question uses pronouns/references
-        // it clearly means they're asking about the previous topic in THIS project
+        // ── Rule 1: Follow-up with pronoun → always CODE ──────────────────────────
         if (previousQuestion != null && !previousQuestion.isBlank()) {
             if (q.startsWith("how is it") || q.startsWith("how it")
                     || q.startsWith("where is it") || q.startsWith("where it")
-                    || q.startsWith("how does it") || q.startsWith("show me")
+                    || q.startsWith("how does it") || q.startsWith("how do i")
                     || q.startsWith("how is this") || q.startsWith("how does this")
-                    || (q.contains("it") && q.contains("project"))
-                    || (q.contains("this") && q.contains("project"))
+                    || q.startsWith("show me") || q.startsWith("where is this")
                     || q.contains("used in this") || q.contains("used here")
-                    || q.contains("implemented here") || q.contains("implemented in this")) {
+                    || q.contains("implemented here") || q.contains("implemented in this")
+                    || q.contains("in this project") || q.contains("in this codebase")
+                    || (q.contains("it") && q.contains("project"))
+                    || (q.contains("this") && q.contains("project"))) {
                 return "CODE";
             }
         }
 
-        // ── Hardcoded CODE rules ──────────────────────────────────────────────────
-        // Questions about how something works in the project — always CODE
-        if (q.contains("how are embeddings") || q.contains("how is embedding")
-                || q.contains("how does the rag") || q.contains("how does rag")
-                || q.contains("how is the repo cloned") || q.contains("how is the github")
-                || q.contains("how does vector") || q.contains("how is vector")
-                || q.contains("how is authentication") || q.contains("how does authentication")
-                || q.contains("how are chunks") || q.contains("how is chunking")
-                || q.contains("how does search") || q.contains("how is search")) {
+        // ── Rule 2: "How does/is/are/do" → always CODE ───────────────────────────
+        // Any question asking how something works belongs to the codebase
+        if (q.startsWith("how does") || q.startsWith("how do ")
+                || q.startsWith("how is") || q.startsWith("how are")
+                || q.startsWith("how was") || q.startsWith("how can")
+                || q.startsWith("explain how") || q.startsWith("describe how")
+                || q.contains("how does the") || q.contains("how is the")
+                || q.contains("how are the")) {
             return "CODE";
         }
 
-        // ── Hardcoded ARCHITECTURE rules ─────────────────────────────────────────
+        // ── Rule 3: "Where is/are" → CODE ────────────────────────────────────────
+        if (q.startsWith("where is") || q.startsWith("where are")
+                || q.startsWith("where does") || q.startsWith("where do")) {
+            return "CODE";
+        }
+
+        // ── Rule 4: Folder/file listing → ARCHITECTURE ───────────────────────────
         if (q.contains("what files are in") || q.contains("list all files")
                 || q.contains("files inside") || q.contains("what is inside the")
-                || q.contains("list files")) {
+                || q.contains("list files") || q.contains("what files")
+                || q.contains("show all files") || q.contains("files in the")) {
             return "ARCHITECTURE";
         }
 
-        // ── LLM classification for everything else ────────────────────────────────
+        // ── Rule 5: Project-level questions → ARCHITECTURE ───────────────────────
+        if (q.contains("what does this project") || q.contains("tell me about this project")
+                || q.contains("what is this project") || q.contains("about the project")
+                || q.contains("what frameworks") || q.contains("what technologies")
+                || q.contains("tech stack") || q.contains("what libraries")) {
+            return "ARCHITECTURE";
+        }
+
+        // ── Rule 6: Specific file names → FILE ───────────────────────────────────
+        String[] fileKeywords = {".tsx", ".ts", ".jsx", ".js", ".java", ".xml",
+                ".json", ".yml", ".yaml", ".md", ".properties",
+                "pom.xml", "package.json", "dockerfile",
+                "vite.config", "tailwind.config", "application.properties",
+                "docker-compose", "readme"};
+        for (String kw : fileKeywords) {
+            if (q.contains(kw)) return "FILE";
+        }
+
+        // ── Rule 7: Specific class names → CLASS ─────────────────────────────────
+        String[] words = question.split("\\s+");
+        for (String word : words) {
+            String clean = word.replaceAll("[^a-zA-Z0-9]", "");
+            if (clean.length() >= 4 && Character.isUpperCase(clean.charAt(0))
+                    && (clean.endsWith("Service") || clean.endsWith("Controller")
+                    || clean.endsWith("Repository") || clean.endsWith("Component")
+                    || clean.endsWith("Entity") || clean.endsWith("Config")
+                    || clean.endsWith("Filter") || clean.endsWith("Handler"))) {
+                return "CLASS";
+            }
+        }
+
+        // ── Rule 8: Casual greetings → CASUAL ────────────────────────────────────
+        if (q.equals("hi") || q.equals("hello") || q.equals("hey")
+                || q.equals("thanks") || q.equals("thank you") || q.equals("ok")
+                || q.equals("okay") || q.equals("good") || q.equals("great")
+                || q.startsWith("hi ") || q.startsWith("hello ") || q.startsWith("hey ")) {
+            return "CASUAL";
+        }
+
+        // ── Rule 9: LLM fallback for ambiguous questions ──────────────────────────
         String context = previousQuestion != null && !previousQuestion.isBlank()
                 ? "Previous question: \"" + previousQuestion + "\"\n"
                 : "";
@@ -77,34 +122,15 @@ Users are asking questions about a specific software project's codebase.
 
 %sClassify the following question into EXACTLY one of these categories:
 
-CASUAL     - greetings, general chat, praise, thanks ("hi", "thanks", "good job")
-             ONLY classify as CASUAL if the question has absolutely nothing to do with code or the project
-ARCHITECTURE - asking about tech stack, frameworks, dependencies, project structure, what the project does,
-               how it works overall, why it was built, what files are in a folder/directory
-FILE       - asking about a specific file by name (e.g. "show me App.tsx", "what is in pom.xml", "show vite.config.ts")
-CLASS      - asking about a specific Java class or React component by its exact name ending in Service/Controller/Repository/Component/Entity/Config
-CODE       - asking about how something is implemented or works in THIS project, including:
-             * how a concept is used/implemented here ("how are embeddings generated", "how does RAG work here")
-             * how a feature works ("how is authentication handled", "how is the repo cloned")
-             * any "how does X work" or "how is X done" question where X is a technical concept
-
-Examples:
-- "hi" = CASUAL
-- "what is machine learning" = CASUAL
-- "what does this project do" = ARCHITECTURE
-- "what frameworks are used" = ARCHITECTURE
-- "show me package.json" = FILE
-- "what is in pom.xml" = FILE
-- "how does SearchService work" = CLASS
-- "explain EmbeddingService" = CLASS
-- "how are embeddings generated" = CODE
-- "how does the RAG pipeline work" = CODE
-- "how is the repo cloned" = CODE
-- "how is vector similarity search done" = CODE
+CASUAL     - greetings, general chat, praise, thanks — ONLY if completely unrelated to any code or project
+ARCHITECTURE - asking about tech stack, project structure, what the project does, how it works overall
+FILE       - asking about a specific file by name
+CLASS      - asking about a specific class or component by exact name
+CODE       - anything else about how the project works, implements something, or handles something
 
 Current question: "%s"
 
-Reply with ONLY the single category word. No explanation. No punctuation.
+Reply with ONLY the single category word. No explanation.
 """.formatted(context, question);
 
         String result = chatService.generateAnswer(prompt).strip().toUpperCase();
@@ -113,8 +139,7 @@ Reply with ONLY the single category word. No explanation. No punctuation.
         if (result.contains("ARCHITECTURE")) return "ARCHITECTURE";
         if (result.contains("FILE")) return "FILE";
         if (result.contains("CLASS")) return "CLASS";
-        if (result.contains("CODE")) return "CODE";
-        return "CODE";
+        return "CODE"; // default to CODE — better to search than answer generically
     }
 
     // ─── Step 2: Route to handler ─────────────────────────────────────────────────
