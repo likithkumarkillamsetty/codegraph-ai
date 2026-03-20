@@ -70,6 +70,9 @@ public class ProjectController {
 
     @PostMapping("/{id}/embed")
     public String embedProject(@PathVariable Long id) {
+        // Delete stale chunks before re-embedding
+        chunkStorageService.deleteByProjectId(id);
+
         Project project = service.getProjectById(id);
         List<File> files = fileScannerService.scanJavaFiles(project.getLocalPath());
         List<SourceFile> sourceFiles = fileContentService.readJavaFiles(files);
@@ -82,23 +85,15 @@ public class ProjectController {
     public List<SearchResult> search(
             @PathVariable Long id,
             @RequestBody String query) {
-
         return searchService.search(id, query);
     }
-
-//    @PostMapping("/{id}/ask")
-//    public String ask(
-//            @PathVariable Long id,
-//            @RequestBody String question) {
-//
-//        return searchService.askQuestion(id, question);
-//    }
 
     @PostMapping("/{id}/ask")
     public AskResponse askProject(
             @PathVariable Long id,
             @RequestBody Map<String, String> body) {
-
-        return searchService.askQuestion(id, body.get("question"));
+        String question = body.get("question");
+        String previousQuestion = body.getOrDefault("previousQuestion", "");
+        return searchService.askQuestion(id, question, previousQuestion);
     }
 }

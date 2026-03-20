@@ -10,11 +10,12 @@ import java.util.List;
 public class FileScannerService {
 
     private static final List<String> SUPPORTED_EXTENSIONS = List.of(
-            ".java", ".properties", ".yml", ".yaml", ".xml", ".json", ".md", ".txt", ".sql"
+            ".java", ".properties", ".yml", ".yaml", ".xml", ".json", ".md", ".txt", ".sql",
+            ".tsx", ".ts", ".jsx", ".js", ".css"
     );
 
     private static final List<String> IGNORED_DIRS = List.of(
-            ".git", "node_modules", "target", "build", ".idea", "__pycache__"
+            ".git", "node_modules", "target", "build", ".idea", "__pycache__", "dist", ".vite"
     );
 
     public List<File> scanJavaFiles(String projectPath) {

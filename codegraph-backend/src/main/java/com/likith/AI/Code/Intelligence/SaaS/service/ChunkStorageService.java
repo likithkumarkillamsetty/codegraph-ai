@@ -1,6 +1,7 @@
 package com.likith.AI.Code.Intelligence.SaaS.service;
 
 import com.likith.AI.Code.Intelligence.SaaS.model.CodeChunk;
+import com.likith.AI.Code.Intelligence.SaaS.repository.CodeChunkRepository;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import jakarta.transaction.Transactional;
@@ -13,12 +14,20 @@ import java.util.List;
 public class ChunkStorageService {
 
     private final EmbeddingService embeddingService;
+    private final CodeChunkRepository codeChunkRepository;
 
     @PersistenceContext
     private EntityManager entityManager;
 
-    public ChunkStorageService(EmbeddingService embeddingService) {
+    public ChunkStorageService(EmbeddingService embeddingService,
+                               CodeChunkRepository codeChunkRepository) {
         this.embeddingService = embeddingService;
+        this.codeChunkRepository = codeChunkRepository;
+    }
+
+    @Transactional
+    public void deleteByProjectId(Long projectId) {
+        codeChunkRepository.deleteByProjectId(projectId);
     }
 
     @Transactional
