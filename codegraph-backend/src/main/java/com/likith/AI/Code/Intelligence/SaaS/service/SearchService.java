@@ -28,6 +28,45 @@ public class SearchService {
     // ─── Step 1: LLM classifies the question ─────────────────────────────────────
 
     private String classifyQuestion(String question, String previousQuestion) {
+
+        String q = question.toLowerCase().trim();
+
+        // ── Hardcoded follow-up rule ──────────────────────────────────────────────
+        // If user has a previous question and current question uses pronouns/references
+        // it clearly means they're asking about the previous topic in THIS project
+        if (previousQuestion != null && !previousQuestion.isBlank()) {
+            if (q.startsWith("how is it") || q.startsWith("how it")
+                    || q.startsWith("where is it") || q.startsWith("where it")
+                    || q.startsWith("how does it") || q.startsWith("show me")
+                    || q.startsWith("how is this") || q.startsWith("how does this")
+                    || (q.contains("it") && q.contains("project"))
+                    || (q.contains("this") && q.contains("project"))
+                    || q.contains("used in this") || q.contains("used here")
+                    || q.contains("implemented here") || q.contains("implemented in this")) {
+                return "CODE";
+            }
+        }
+
+        // ── Hardcoded CODE rules ──────────────────────────────────────────────────
+        // Questions about how something works in the project — always CODE
+        if (q.contains("how are embeddings") || q.contains("how is embedding")
+                || q.contains("how does the rag") || q.contains("how does rag")
+                || q.contains("how is the repo cloned") || q.contains("how is the github")
+                || q.contains("how does vector") || q.contains("how is vector")
+                || q.contains("how is authentication") || q.contains("how does authentication")
+                || q.contains("how are chunks") || q.contains("how is chunking")
+                || q.contains("how does search") || q.contains("how is search")) {
+            return "CODE";
+        }
+
+        // ── Hardcoded ARCHITECTURE rules ─────────────────────────────────────────
+        if (q.contains("what files are in") || q.contains("list all files")
+                || q.contains("files inside") || q.contains("what is inside the")
+                || q.contains("list files")) {
+            return "ARCHITECTURE";
+        }
+
+        // ── LLM classification for everything else ────────────────────────────────
         String context = previousQuestion != null && !previousQuestion.isBlank()
                 ? "Previous question: \"" + previousQuestion + "\"\n"
                 : "";
@@ -47,21 +86,21 @@ CLASS      - asking about a specific Java class or React component by its exact 
 CODE       - asking about how something is implemented or works in THIS project, including:
              * how a concept is used/implemented here ("how are embeddings generated", "how does RAG work here")
              * how a feature works ("how is authentication handled", "how is the repo cloned")
-             * follow-up questions where previous question gives context ("how is it used in this project" after asking about pgvector = CODE about pgvector)
-             * any "how does X work" question where X is a technical concept
+             * any "how does X work" or "how is X done" question where X is a technical concept
 
-CRITICAL RULES:
-- If previous question asked about a concept (pgvector, RAG, embeddings, etc.) and current question says "how is it used", "where is it used", "show me", "how does it work here" = CODE
-- "how are embeddings generated" = CODE (not a generic ML question — asking about THIS project)
-- "how does the RAG pipeline work" = CODE
-- "how is authentication handled" = CODE
-- "what files are in codegraph-frontend" = ARCHITECTURE
-- "list all files in the backend" = ARCHITECTURE
-- "what is inside the frontend folder" = ARCHITECTURE
+Examples:
+- "hi" = CASUAL
+- "what is machine learning" = CASUAL
 - "what does this project do" = ARCHITECTURE
-- "tell me about this project" = ARCHITECTURE
-- Generic definition questions with NO previous context ("what is machine learning") = CASUAL
-- Generic definition questions WITH follow-up about usage in project = CODE for the follow-up
+- "what frameworks are used" = ARCHITECTURE
+- "show me package.json" = FILE
+- "what is in pom.xml" = FILE
+- "how does SearchService work" = CLASS
+- "explain EmbeddingService" = CLASS
+- "how are embeddings generated" = CODE
+- "how does the RAG pipeline work" = CODE
+- "how is the repo cloned" = CODE
+- "how is vector similarity search done" = CODE
 
 Current question: "%s"
 
