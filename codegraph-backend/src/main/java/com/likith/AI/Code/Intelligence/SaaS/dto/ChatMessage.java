@@ -7,3 +7,4 @@ package com.likith.AI.Code.Intelligence.SaaS.dto;
  */
 public record ChatMessage(String role, String content) {
 }
+

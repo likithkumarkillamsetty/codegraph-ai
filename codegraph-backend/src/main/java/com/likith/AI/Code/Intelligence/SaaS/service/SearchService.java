@@ -91,6 +91,16 @@ public class SearchService {
             return "ARCHITECTURE";
         }
 
+        // ── Rule 5.5: Unconditional project reference → CODE ─────────────────────
+        // Any question that explicitly mentions "in this project/repo/codebase/app"
+        // should be treated as code-specific, not casual or architecture.
+        if (q.contains("in this project") || q.contains("in this repo")
+                || q.contains("this codebase") || q.contains("this application")
+                || q.contains("in this application") || q.contains("from this project")
+                || q.contains("of this project") || q.contains("from this codebase")) {
+            return "CODE";
+        }
+
         // ── Rule 6: Specific file names → FILE ───────────────────────────────────
         String[] fileKeywords = {".tsx", ".ts", ".jsx", ".js", ".java", ".xml",
                 ".json", ".yml", ".yaml", ".md", ".properties",
@@ -379,14 +389,14 @@ User Question:
         List<CodeChunkEntity> chunks;
         if (pathFragment != null) {
             // Search within the suspected file/class/path first
-            chunks = repository.findSimilarChunksInPath(queryEmbedding, projectId, pathFragment, initialLimit, similarityThreshold);
+            chunks = repository.findSimilarChunksInPath(queryEmbedding, projectId, pathFragment, initialLimit);
             // If no results within that specific path, fall back to global search
             if (chunks.isEmpty()) {
-                chunks = repository.searchSimilarChunks(projectId, queryEmbedding, initialLimit, similarityThreshold);
+                chunks = repository.searchSimilarChunks(projectId, queryEmbedding, initialLimit);
             }
         } else {
             // Global search
-            chunks = repository.searchSimilarChunks(projectId, queryEmbedding, initialLimit, similarityThreshold);
+            chunks = repository.searchSimilarChunks(projectId, queryEmbedding, initialLimit);
         }
 
         List<CodeChunkEntity> relevant = chunks.stream()
@@ -396,13 +406,8 @@ User Question:
                 .collect(Collectors.toList());
 
         if (relevant.isEmpty()) {
-            String directPrompt = """
-You are CodeGraph AI — a helpful assistant for developers.
-Answer this question as best you can. If it requires specific code knowledge you don't have, say so honestly.
-
-Question: %s
-""".formatted(question);
-            return new AskResponse(chatService.generateAnswer(directPrompt), false);
+            String answer = "I couldn't find relevant code snippets in the project for this question. Try asking about a specific class, file, or component by name (e.g., \"How does AuthService work?\").";
+            return new AskResponse(answer, false);
         }
 
         String context = relevant.stream()
@@ -441,7 +446,7 @@ User Question:
 
     public List<SearchResult> search(Long projectId, String query) {
         String queryEmbedding = embeddingService.getEmbedding(query);
-        List<CodeChunkEntity> chunks = repository.searchSimilarChunks(projectId, queryEmbedding, initialLimit, similarityThreshold);
+        List<CodeChunkEntity> chunks = repository.searchSimilarChunks(projectId, queryEmbedding, initialLimit);
 
         if (chunks.isEmpty()) return new ArrayList<>();
 
