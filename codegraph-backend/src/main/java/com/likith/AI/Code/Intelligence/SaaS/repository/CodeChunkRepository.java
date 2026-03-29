@@ -16,13 +16,15 @@ public interface CodeChunkRepository extends JpaRepository<CodeChunkEntity, Long
                embedding <-> CAST(:embedding AS vector) AS similarity
         FROM code_chunks
         WHERE project_id = :projectId
+          AND (embedding <-> CAST(:embedding AS vector)) < :threshold
         ORDER BY embedding <-> CAST(:embedding AS vector)
         LIMIT :limit
         """, nativeQuery = true)
     List<CodeChunkEntity> searchSimilarChunks(
             @Param("projectId") Long projectId,
             @Param("embedding") String embedding,
-            @Param("limit") int limit
+            @Param("limit") int limit,
+            @Param("threshold") double threshold
     );
 
     @Query(value = """
@@ -42,7 +44,8 @@ public interface CodeChunkRepository extends JpaRepository<CodeChunkEntity, Long
                embedding <-> CAST(:embedding AS vector) AS similarity
         FROM code_chunks
         WHERE project_id = :projectId
-        AND LOWER(file_path) LIKE LOWER(CONCAT('%', :pathFragment, '%'))
+          AND LOWER(file_path) LIKE LOWER(CONCAT('%', :pathFragment, '%'))
+          AND (embedding <-> CAST(:embedding AS vector)) < :threshold
         ORDER BY embedding <-> CAST(:embedding AS vector)
         LIMIT :limit
         """, nativeQuery = true)
@@ -50,7 +53,8 @@ public interface CodeChunkRepository extends JpaRepository<CodeChunkEntity, Long
             @Param("embedding") String embedding,
             @Param("projectId") Long projectId,
             @Param("pathFragment") String pathFragment,
-            @Param("limit") int limit
+            @Param("limit") int limit,
+            @Param("threshold") double threshold
     );
 
     @Modifying

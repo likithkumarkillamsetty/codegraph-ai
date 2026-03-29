@@ -1,6 +1,7 @@
 package com.likith.AI.Code.Intelligence.SaaS.controller;
 
 import com.likith.AI.Code.Intelligence.SaaS.dto.AskResponse;
+import com.likith.AI.Code.Intelligence.SaaS.dto.ChatMessage;
 import com.likith.AI.Code.Intelligence.SaaS.dto.CreateProjectRequest;
 import com.likith.AI.Code.Intelligence.SaaS.dto.SearchResult;
 import com.likith.AI.Code.Intelligence.SaaS.entity.Project;
@@ -10,6 +11,7 @@ import com.likith.AI.Code.Intelligence.SaaS.service.*;
 import org.springframework.web.bind.annotation.*;
 
 import java.io.File;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -91,9 +93,33 @@ public class ProjectController {
     @PostMapping("/{id}/ask")
     public AskResponse askProject(
             @PathVariable Long id,
-            @RequestBody Map<String, String> body) {
-        String question = body.get("question");
-        String previousQuestion = body.getOrDefault("previousQuestion", "");
-        return searchService.askQuestion(id, question, previousQuestion);
+            @RequestBody Map<String, Object> body) {
+        String question = (String) body.get("question");
+
+        // Parse conversation history (new format) or fallback to previousQuestion (legacy)
+        List<ChatMessage> history = new ArrayList<>();
+        Object historyObj = body.get("history");
+        if (historyObj instanceof List) {
+            for (Object item : (List<?>) historyObj) {
+                if (item instanceof Map) {
+                    Map<?,?> map = (Map<?,?>) item;
+                    String role = (String) map.get("role");
+                    String content = (String) map.get("content");
+                    if (role != null && content != null) {
+                        history.add(new ChatMessage(role, content));
+                    }
+                }
+            }
+        }
+
+        // Legacy support: previousQuestion as single string
+        if (history.isEmpty() && body.containsKey("previousQuestion")) {
+            String prev = (String) body.get("previousQuestion");
+            if (prev != null && !prev.isBlank()) {
+                history.add(new ChatMessage("user", prev));
+            }
+        }
+
+        return searchService.askQuestion(id, question, history);
     }
 }
