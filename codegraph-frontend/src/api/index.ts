@@ -1,7 +1,7 @@
 import axios from 'axios'
 import type {AskResponse, Project, SearchResult} from '../types'
 
-const api = axios.create({ baseURL: '/api', timeout: 120000 })
+const api = axios.create({ baseURL: '/api', timeout: 0 })
 
 export const projectApi = {
   create: (name: string, githubUrl: string): Promise<Project> =>

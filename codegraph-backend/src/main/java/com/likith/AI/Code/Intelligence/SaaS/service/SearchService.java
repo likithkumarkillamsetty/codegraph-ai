@@ -180,6 +180,10 @@ Reply with ONLY the single category word from the list above. No explanation.
 
         String category = classifyQuestion(question, previousQuestion);
 
+        System.out.println("DEBUG: Question: " + question);
+        System.out.println("DEBUG: Classified Category: " + category);
+
+
         // Rewrite the question for retrieval if it is a follow-up
         String retrievalQuery = rewriteQuestionForRetrieval(question, history);
 
@@ -401,9 +405,15 @@ User Question:
 
         List<CodeChunkEntity> relevant = chunks.stream()
                 .filter(c -> c.getContent() != null && c.getContent().trim().length() > 100)
-                .filter(c -> c.getSimilarity() != null && c.getSimilarity() < similarityThreshold)
                 .limit(finalLimit)
                 .collect(Collectors.toList());
+
+        System.out.println("DEBUG: Chunks retrieved count: " + chunks.size());
+        System.out.println("DEBUG: Chunks after filtering: " + relevant.size());
+        System.out.println("DEBUG: Similarity scores of kept chunks:");
+        for (CodeChunkEntity c : relevant) {
+            System.out.println(" - " + c.getFilePath() + " | score: " + c.getSimilarity());
+        }
 
         if (relevant.isEmpty()) {
             String answer = "I couldn't find relevant code snippets in the project for this question. Try asking about a specific class, file, or component by name (e.g., \"How does AuthService work?\").";
@@ -450,10 +460,20 @@ User Question:
 
         if (chunks.isEmpty()) return new ArrayList<>();
 
-        return chunks.stream()
+        List<CodeChunkEntity> relevant = chunks.stream()
                 .filter(c -> c.getContent() != null && c.getContent().trim().length() > 100)
-                .filter(c -> c.getSimilarity() != null && c.getSimilarity() < similarityThreshold)
                 .limit(finalLimit)
+                .toList();
+
+        System.out.println("DEBUG: Search query: " + query);
+        System.out.println("DEBUG: Chunks retrieved count: " + chunks.size());
+        System.out.println("DEBUG: Chunks after filtering: " + relevant.size());
+        System.out.println("DEBUG: Similarity scores of kept chunks:");
+        for (CodeChunkEntity c : relevant) {
+            System.out.println(" - " + c.getFilePath() + " | score: " + c.getSimilarity());
+        }
+
+        return relevant.stream()
                 .map(chunk -> new SearchResult(
                         chunk.getFilePath(),
                         chunk.getContent(),
